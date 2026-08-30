@@ -23,6 +23,11 @@ import io.github.artificialpb.bignum.bigIntegerOf
  * */
 interface Middleware : EthApi, DebugApi, NetApi, TxpoolApi, Web3Api, AutoCloseable {
     /**
+     * EVM chain id, known at construction.
+     * */
+    val chainId: Long
+
+    /**
      * Get the underlying [JsonRpcClient].
      * */
     val client: JsonRpcClient

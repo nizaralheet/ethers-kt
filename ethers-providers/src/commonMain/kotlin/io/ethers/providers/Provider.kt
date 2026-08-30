@@ -85,10 +85,6 @@ class Provider(override val client: JsonRpcClient, override val chainId: Long) :
     //-----------------------------------------------------------------------------------------------------------------
     //                                  EthApi implementation
     //-----------------------------------------------------------------------------------------------------------------
-    override fun getChainId(): RpcRequest<Long, RpcError> {
-        return RpcCall(client, "eth_chainId", EMPTY_ARRAY) { it.jsonPrimitive.asHexLong() }
-    }
-
     override fun getBlockNumber(): RpcRequest<Long, RpcError> {
         return RpcCall(client, "eth_blockNumber", EMPTY_ARRAY) { it.jsonPrimitive.asHexLong() }
     }

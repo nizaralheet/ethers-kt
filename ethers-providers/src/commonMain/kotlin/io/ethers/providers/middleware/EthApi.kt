@@ -29,16 +29,6 @@ import io.github.artificialpb.bignum.BigInteger
 
 interface EthApi {
     /**
-     * EVM chain id.
-     */
-    val chainId: Long
-
-    /**
-     * Get chain id from the node.
-     */
-    fun getChainId(): RpcRequest<Long, RpcError>
-
-    /**
      * Get latest block number.
      */
     fun getBlockNumber(): RpcRequest<Long, RpcError>
