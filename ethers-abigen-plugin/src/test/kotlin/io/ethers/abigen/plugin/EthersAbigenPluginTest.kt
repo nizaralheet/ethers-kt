@@ -5,6 +5,7 @@ import io.ethers.abigen.plugin.task.EthersAbigenTask
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.gradle.api.ProjectConfigurationException
 import org.gradle.api.internal.project.ProjectInternal
 import org.gradle.testfixtures.ProjectBuilder
@@ -52,6 +53,121 @@ class EthersAbigenPluginTest : FunSpec({
         provider.contractGlobFilters.get() shouldBe listOf("erc/ERC20.sol", "erc/ERC721.sol")
         provider.contractGlobFilters.add("erc/ERC1155.sol")
         provider.contractGlobFilters.get() shouldBe listOf("erc/ERC20.sol", "erc/ERC721.sol", "erc/ERC1155.sol")
+    }
+
+    context("foundry source execution") {
+        val project = ProjectBuilder.builder().build()
+        val foundryRoot = project.layout.projectDirectory.dir("src/main/solidity").asFile
+        val foundryBin = project.layout.projectDirectory.dir("fake-foundry-bin").asFile
+        val localBuildCacheDir = project.layout.projectDirectory.dir("local-build-cache").asFile
+
+        foundryRoot.mkdirs()
+        foundryBin.mkdirs()
+        File(foundryRoot, "foundry.toml").writeText(
+            """
+                [profile.default]
+                src = "src"
+                out = "out"
+            """.trimIndent(),
+        )
+        File(foundryRoot, "src/Counter.sol").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                    // SPDX-License-Identifier: MIT
+                    pragma solidity ^0.8.24;
+                    contract Counter {}
+                """.trimIndent(),
+            )
+        }
+
+        File(foundryBin, "forge").apply {
+            writeText(
+                """
+                    #!/bin/sh
+                    if [ "$FOUNDRY_PROFILE" != "ci" ]; then
+                      echo "wrong profile: $FOUNDRY_PROFILE" >&2
+                      exit 2
+                    fi
+                    echo "$FOUNDRY_PROFILE" > "$PWD/forge-profile.txt"
+                    mkdir -p "$PWD/out/Counter.sol"
+                    cat > "$PWD/out/Counter.sol/Counter.json" <<'JSON'
+                    {
+                      "abi": [{"type":"function","name":"count","stateMutability":"view","inputs":[],"outputs":[{"type":"uint256"}]}],
+                      "metadata": {
+                        "settings": {
+                          "compilationTarget": {
+                            "src/Counter.sol": "Counter"
+                          }
+                        }
+                      }
+                    }
+                    JSON
+                """.trimIndent(),
+            )
+            setExecutable(true)
+        }
+
+        @Language("gradle")
+        val settingsFile = """
+            rootProject.name = 'ethers-abigen-plugin-foundry-test'
+            
+            buildCache {
+                local {
+                    directory '${localBuildCacheDir.toURI()}'
+                }
+            }
+        """.trimIndent()
+
+        @Language("gradle")
+        val buildFile = """
+            plugins {
+                id 'base'
+                id 'org.jetbrains.kotlin.jvm'
+                id 'io.kriptal.ethers.abigen-plugin'
+            }
+            
+            ethersAbigen {
+                sourceProviders.set([])
+                foundrySource('io.ethers.contracts') {
+                    foundryRoot = 'src/main/solidity'
+                    foundryProfile = 'ci'
+                    contractGlobFilters.add('Counter.sol')
+                }
+            }
+        """.trimIndent()
+
+        project.layout.projectDirectory.file("settings.gradle").asFile.writeText(settingsFile)
+        project.layout.projectDirectory.file("build.gradle").asFile.writeText(buildFile)
+
+        val runner = GradleRunner.create()
+            .withProjectDir(project.layout.projectDirectory.asFile)
+            .withPluginClasspath()
+            .withGradleVersion("9.5")
+            .withEnvironment(
+                mapOf(
+                    "PATH" to "${foundryBin.absolutePath}:${System.getenv("PATH") ?: ""}",
+                ),
+            )
+            .withDebug(true)
+            .forwardOutput()
+
+        test("task runs with foundry source provider on Gradle 9.5 and reuses configuration cache") {
+            val firstRun = runner.withArguments("ethersAbigen", "--configuration-cache", "--build-cache", "--info").build()
+            firstRun.tasks.filter { it.path.endsWith("ethersAbigen") }.forEach { it.outcome shouldBe TaskOutcome.SUCCESS }
+
+            val profileFile = File(foundryRoot, "forge-profile.txt")
+            profileFile.readText().trim() shouldBe "ci"
+
+            val generatedFiles = project.layout.buildDirectory.dir("generated/source/ethers/main/kotlin").get().asFile
+                .walkTopDown()
+                .filter(File::isFile)
+                .toList()
+            generatedFiles.isNotEmpty() shouldBe true
+
+            val secondRun = runner.withArguments("ethersAbigen", "--configuration-cache", "--build-cache", "--info").build()
+            secondRun.output shouldContain "Reusing configuration cache."
+        }
     }
 
     context("task execution") {

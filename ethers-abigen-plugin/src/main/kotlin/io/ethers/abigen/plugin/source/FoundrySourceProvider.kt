@@ -10,10 +10,10 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.ProjectLayout
 import org.gradle.api.file.RegularFile
 import org.gradle.api.file.RegularFileProperty
-import org.gradle.api.logging.Logger
+import org.gradle.api.logging.Logging
 import org.gradle.api.model.ObjectFactory
-import org.gradle.api.provider.Property
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.provider.ProviderFactory
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
@@ -22,12 +22,9 @@ import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.SkipWhenEmpty
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.FileSystems
 import java.nio.file.PathMatcher
-import java.util.stream.Collectors
 import javax.inject.Inject
 
 /**
@@ -46,8 +43,7 @@ abstract class FoundrySourceProvider : AbiSourceProvider {
     @get:Inject
     abstract val providerFactory: ProviderFactory
 
-    @get:Inject
-    abstract val logger: Logger
+    private val logger = Logging.getLogger(FoundrySourceProvider::class.java)
 
     /**
      * The parent package name of the generated Kotlin files.
@@ -107,6 +103,7 @@ abstract class FoundrySourceProvider : AbiSourceProvider {
     /**
      * Root directory where foundry project is located.
      * */
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     @get:InputDirectory
     val foundryRootDir: DirectoryProperty = objectFactory.directoryProperty().convention(
         projectLayout.projectDirectory.dir(foundryRoot),
@@ -190,20 +187,20 @@ abstract class FoundrySourceProvider : AbiSourceProvider {
     }
 
     private fun forgeBuild() {
-        val errorOutput = ByteArrayOutputStream()
         val commands = listOf("forge", "build", "--force", "--extra-output", "abi", "metadata", "evm.bytecode")
 
-        val result = providerFactory.exec {
+        val execOutput = providerFactory.exec {
             it.commandLine(commands)
             it.environment("FOUNDRY_PROFILE", foundryProfile.get())
             it.workingDir = foundryRootDir.get().asFile
-            it.errorOutput = errorOutput
-        }.result.get()
+        }
+
+        val result = execOutput.result.get()
+        val errorOutput = execOutput.standardError.asText.get()
 
         val cmd = commands.joinToString(" ")
         if (result.exitValue != 0) {
-            val errorReader = ByteArrayInputStream(errorOutput.toByteArray()).bufferedReader()
-            val error = errorReader.lines().collect(Collectors.toList()).last()
+            val error = errorOutput.lineSequence().filter { it.isNotBlank() }.lastOrNull() ?: "unknown forge error"
 
             logger.error("Foundry build failed for command `$cmd` and profile `${foundryProfile.get()}`: $error")
             result.rethrowFailure()
